@@ -68,10 +68,6 @@ This project is designed with production-grade security:
 - **Server-Side API Keys:** The Gemini API key is never exposed to the client. It is securely utilized inside Next.js API routes.
 - **Anti-Abuse Measures:** In-memory rate limiting prevents API spamming and quota exhaustion.
 
-## 🤝 Contributing
-
-Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/yourusername/ai-interviewer/issues).
-
 ## 📝 License
 
 This project is licensed under the MIT License.
