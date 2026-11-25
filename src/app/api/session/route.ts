@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { getPromptForPersona, PersonaType } from '@/lib/prompts';
+import { createEphemeralWsUrl } from '@/lib/gemini';
 
 export async function POST(request: Request) {
   try {
@@ -17,31 +18,34 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Unauthorized', details: authError?.message }, { status: 401 });
     }
 
-    // 2. Accept personaType payload
-    const body = await request.json();
-    const personaType = body.personaType as PersonaType;
+    // 2. Parse payload (supports refreshOnly for minting a fresh token right before WS connect)
+    const body = await request.json().catch(() => ({}));
+    const refreshOnly = body?.refreshOnly === true;
 
+    if (refreshOnly) {
+      const wsUrl = await createEphemeralWsUrl();
+      return NextResponse.json(
+        { wsUrl },
+        { headers: { 'Cache-Control': 'no-store' } }
+      );
+    }
+
+    const personaType = body?.personaType as PersonaType;
     if (!personaType) {
       return NextResponse.json({ error: 'Missing personaType in request body' }, { status: 400 });
     }
 
-    // 3. Fetch matching system prompt
+    // 3. Fetch matching system prompt and mint ephemeral WebSocket URL
     const systemPrompt = getPromptForPersona(personaType);
+    const wsUrl = await createEphemeralWsUrl();
 
-    // 4. Retrieve Gemini API Key
-    const geminiApiKey = process.env.GEMINI_API_KEY;
-    if (!geminiApiKey) {
-      console.error('❌ Missing GEMINI_API_KEY');
-      return NextResponse.json({ error: 'GEMINI_API_KEY is not configured in .env.local' }, { status: 500 });
-    }
-
-    // 5. Construct WebSocket URL for Gemini Live Multimodal Bidi API
-    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${geminiApiKey}`;
-
-    return NextResponse.json({
-      wsUrl,
-      systemPrompt,
-    });
+    return NextResponse.json(
+      {
+        wsUrl,
+        systemPrompt,
+      },
+      { headers: { 'Cache-Control': 'no-store' } }
+    );
 
   } catch (error: any) {
     console.error('Session Error:', error);

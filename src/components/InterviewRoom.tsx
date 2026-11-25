@@ -68,10 +68,32 @@ export function InterviewRoom({ interviewId, systemPrompt, wsUrl, onComplete, on
       setStatus('connecting');
       setDebugLog("Authenticating user...");
 
-      // 1. Check Auth
-      const { data: userData } = await supabase.auth.getUser();
-      const userId = userData.user?.id;
-      if (!userId) throw new Error("User not authenticated");
+      // 1. Check Auth & mint a fresh single-use ephemeral WebSocket URL right before connecting
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user?.id || !session.access_token) {
+        throw new Error("User not authenticated");
+      }
+
+      setDebugLog("Requesting ephemeral session token...");
+      let activeWsUrl = wsUrl;
+      const tokenRes = await fetch('/api/session', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ refreshOnly: true }),
+      });
+
+      if (tokenRes.ok) {
+        const tokenData = await tokenRes.json();
+        if (tokenData.wsUrl) {
+          activeWsUrl = tokenData.wsUrl;
+        }
+      } else {
+        const errData = await tokenRes.json().catch(() => ({}));
+        throw new Error(errData.error || "Failed to obtain ephemeral session token");
+      }
 
       // 2. Initialize Web Audio API for PCM playback (24kHz)
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
@@ -92,7 +114,7 @@ export function InterviewRoom({ interviewId, systemPrompt, wsUrl, onComplete, on
 
       // 4. Setup Gemini Live WebSocket
       setDebugLog("Connecting to Gemini Live WebSocket...");
-      const ws = new WebSocket(wsUrl);
+      const ws = new WebSocket(activeWsUrl);
       wsRef.current = ws;
 
       ws.onopen = async () => {
@@ -214,16 +236,16 @@ export function InterviewRoom({ interviewId, systemPrompt, wsUrl, onComplete, on
         const recognition = new SpeechRecognition();
         recognition.continuous = true;
         recognition.interimResults = false;
-        
+
         recognition.onresult = (event: any) => {
           const currentTranscript = event.results[event.results.length - 1][0].transcript;
           setTranscripts(prev => [...prev, { role: 'user', content: currentTranscript }]);
         };
 
         recognition.onerror = (event: any) => console.error("Speech recognition error:", event.error);
-        
+
         speechRecognitionRef.current = recognition;
-        recognition.start(); 
+        recognition.start();
       }
 
       // Force AudioContext to 16000Hz sample rate downsampling
@@ -341,13 +363,13 @@ export function InterviewRoom({ interviewId, systemPrompt, wsUrl, onComplete, on
       mediaStreamRef.current.getTracks().forEach(track => track.stop());
     }
     if (scriptProcessorRef.current) {
-      try { scriptProcessorRef.current.disconnect(); } catch (e) {}
+      try { scriptProcessorRef.current.disconnect(); } catch (e) { }
     }
     if (speechRecognitionRef.current) {
-      try { speechRecognitionRef.current.stop(); } catch (e) {}
+      try { speechRecognitionRef.current.stop(); } catch (e) { }
     }
     if (audioContextRef.current) {
-      try { audioContextRef.current.close(); } catch (e) {}
+      try { audioContextRef.current.close(); } catch (e) { }
     }
 
     if (interviewId && transcripts.length > 0) {

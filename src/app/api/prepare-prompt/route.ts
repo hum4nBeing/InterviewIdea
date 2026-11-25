@@ -2,11 +2,14 @@ import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { parsePdfBuffer } from '@/lib/cvParser';
 import { fetchGitHubContext } from '@/lib/github';
+import { createEphemeralWsUrl } from '@/lib/gemini';
 
 // Simple in-memory rate limiter (limits per user.id)
 const rateLimitMap = new Map<string, { count: number, resetTime: number }>();
 const RATE_LIMIT = 5; // Max 5 interviews per minute
 const RATE_LIMIT_WINDOW = 60 * 1000;
+
+
 
 export async function POST(request: Request) {
   try {
@@ -14,7 +17,7 @@ export async function POST(request: Request) {
     if (!authHeader) return NextResponse.json({ error: 'Missing Authorization' }, { status: 401 });
     const token = authHeader.replace('Bearer ', '');
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    
+
     if (authError || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     // Rate Limiting Check
@@ -47,12 +50,12 @@ export async function POST(request: Request) {
 
     if (devMode) {
       const generatedPrompt = `You are a mock AI interviewer. Test the user on basic concepts. Keep the interview very short.`;
-      
+
       const { data: interviewData, error: insertError } = await authSupabase
         .from('interviews')
-        .insert({ 
-          user_id: user.id, 
-          persona_type: (targetRole || 'dev-mode').toLowerCase().replace(/\s+/g, '-'), 
+        .insert({
+          user_id: user.id,
+          persona_type: (targetRole || 'dev-mode').toLowerCase().replace(/\s+/g, '-'),
           status: 'in_progress',
           target_role: targetRole || 'Dev Mode',
           cv_text: 'Dev Mode Mock CV',
@@ -61,17 +64,19 @@ export async function POST(request: Request) {
         })
         .select('id')
         .single();
-        
+
       if (insertError) throw new Error(insertError.message);
 
-      const geminiApiKey = process.env.GEMINI_API_KEY;
-      const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${geminiApiKey}`;
+      const wsUrl = await createEphemeralWsUrl();
 
-      return NextResponse.json({
-        interviewId: interviewData.id,
-        systemPrompt: generatedPrompt,
-        wsUrl
-      });
+      return NextResponse.json(
+        {
+          interviewId: interviewData.id,
+          systemPrompt: generatedPrompt,
+          wsUrl
+        },
+        { headers: { 'Cache-Control': 'no-store' } }
+      );
     }
 
     if (!cvFile || !targetRole) {
@@ -96,7 +101,10 @@ export async function POST(request: Request) {
 
     // Call Gemini for Prompt Synthesis
     const geminiApiKey = process.env.GEMINI_API_KEY;
-    
+    if (!geminiApiKey) {
+      return NextResponse.json({ error: 'GEMINI_API_KEY is not configured in .env.local' }, { status: 500 });
+    }
+
     const metaPrompt = `You are a strict, highly technical senior engineering manager. Your task is to generate a SYSTEM INSTRUCTION (Prompt) for an AI Interviewer who will be interviewing a candidate for the role of "${targetRole}".
 
 Here is the candidate's CV text:
@@ -138,9 +146,9 @@ Output ONLY the raw text for the system instruction, no markdown blocks, no intr
     // Save to Supabase using the authenticated client
     const { data: interviewData, error: insertError } = await authSupabase
       .from('interviews')
-      .insert({ 
-        user_id: user.id, 
-        persona_type: targetRole.toLowerCase().replace(/\s+/g, '-'), 
+      .insert({
+        user_id: user.id,
+        persona_type: targetRole.toLowerCase().replace(/\s+/g, '-'),
         status: 'in_progress',
         target_role: targetRole,
         cv_text: cvText,
@@ -152,13 +160,16 @@ Output ONLY the raw text for the system instruction, no markdown blocks, no intr
 
     if (insertError) throw new Error(insertError.message);
 
-    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${geminiApiKey}`;
+    const wsUrl = await createEphemeralWsUrl();
 
-    return NextResponse.json({
-      interviewId: interviewData.id,
-      systemPrompt: generatedPrompt,
-      wsUrl
-    });
+    return NextResponse.json(
+      {
+        interviewId: interviewData.id,
+        systemPrompt: generatedPrompt,
+        wsUrl
+      },
+      { headers: { 'Cache-Control': 'no-store' } }
+    );
 
   } catch (error: any) {
     console.error("prepare-prompt error:", error);
