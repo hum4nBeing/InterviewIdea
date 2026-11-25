@@ -49,6 +49,10 @@ export default function Home() {
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
+     if (!email || !password) {
+      alert("Please enter both email and password.");
+      return;
+    }
     const { error } = await supabase.auth.signUp({ email, password });
     if (error) alert(error.message);
     else alert('Check your email for the login link! (Or if email confirmations are off, you can now log in)');
